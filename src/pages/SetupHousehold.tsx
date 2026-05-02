@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { doc, setDoc, updateDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, updateDoc, arrayUnion, serverTimestamp, getDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { motion } from 'motion/react';
+import { motion } from 'framer-motion';
 import { House, Plus, Hash } from 'lucide-react';
 
 export const SetupHousehold: React.FC = () => {
@@ -13,29 +13,52 @@ export const SetupHousehold: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const generateHouseholdId = () => {
+    return Math.random()
+      .toString(36)
+      .substring(2, 10)
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .toUpperCase();
+  };
+
   const createHousehold = async () => {
     if (!user) return;
+
+    if (!householdName.trim()) {
+      setError('Digite um nome para o grupo.');
+      return;
+    }
+
     setLoading(true);
+    setError('');
+
     try {
-      const householdId = Math.random().toString(36).substring(2, 10).toUpperCase();
+      const householdId = generateHouseholdId();
       const householdRef = doc(db, 'households', householdId);
-      
+
+      // 🔹 Cria o grupo
       await setDoc(householdRef, {
-        name: householdName,
+        name: householdName.trim(),
         createdBy: user.uid,
         memberIds: [user.uid],
         createdAt: serverTimestamp()
       });
 
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName || 'Usuário',
-        householdId: householdId,
-        createdAt: serverTimestamp()
-      });
+      // 🔹 Cria/atualiza o usuário
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || 'Usuário',
+          householdId: householdId,
+          createdAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Erro ao criar grupo.');
     } finally {
       setLoading(false);
     }
@@ -43,28 +66,43 @@ export const SetupHousehold: React.FC = () => {
 
   const joinHousehold = async () => {
     if (!user) return;
+
+    if (!joinId.trim()) {
+      setError('Digite o código do grupo.');
+      return;
+    }
+
     setLoading(true);
+    setError('');
+
     try {
-      const householdRef = doc(db, 'households', joinId);
-      const householdSnap = await (await import('firebase/firestore')).getDoc(householdRef);
+      const householdRef = doc(db, 'households', joinId.trim());
+      const householdSnap = await getDoc(householdRef);
 
       if (!householdSnap.exists()) {
         throw new Error('Grupo não encontrado.');
       }
 
+      // 🔹 Adiciona usuário ao grupo
       await updateDoc(householdRef, {
         memberIds: arrayUnion(user.uid)
       });
 
-      await setDoc(doc(db, 'users', user.uid), {
-        uid: user.uid,
-        email: user.email,
-        displayName: user.displayName || 'Usuário',
-        householdId: joinId,
-        createdAt: serverTimestamp()
-      });
+      // 🔹 Atualiza usuário
+      await setDoc(
+        doc(db, 'users', user.uid),
+        {
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || 'Usuário',
+          householdId: joinId.trim(),
+          createdAt: serverTimestamp()
+        },
+        { merge: true }
+      );
+
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || 'Erro ao entrar no grupo.');
     } finally {
       setLoading(false);
     }
@@ -87,7 +125,11 @@ export const SetupHousehold: React.FC = () => {
           </p>
         </div>
 
-        {error && <p className="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 italic">{error}</p>}
+        {error && (
+          <p className="bg-red-50 text-red-600 p-3 rounded-xl text-sm mb-4 italic">
+            {error}
+          </p>
+        )}
 
         {mode === 'root' && (
           <div className="grid grid-cols-1 gap-4">
@@ -101,6 +143,7 @@ export const SetupHousehold: React.FC = () => {
                 <p className="text-sm text-zinc-500">Inicie um novo controle do zero</p>
               </div>
             </button>
+
             <button
               onClick={() => setMode('join')}
               className="flex items-center gap-4 p-6 border-2 border-zinc-100 rounded-2xl hover:border-zinc-900 hover:bg-zinc-50 transition-all text-left"
@@ -123,14 +166,21 @@ export const SetupHousehold: React.FC = () => {
               onChange={(e) => setHouseholdName(e.target.value)}
               className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900"
             />
+
             <button
               disabled={loading || !householdName}
               onClick={createHousehold}
-              className="w-full py-4 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 transition-colors"
+              className="w-full py-4 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 transition-colors disabled:opacity-50"
             >
               {loading ? 'Criando...' : 'Criar Grupo'}
             </button>
-            <button onClick={() => setMode('root')} className="w-full text-zinc-500 text-sm">Voltar</button>
+
+            <button
+              onClick={() => setMode('root')}
+              className="w-full text-zinc-500 text-sm"
+            >
+              Voltar
+            </button>
           </div>
         )}
 
@@ -140,17 +190,24 @@ export const SetupHousehold: React.FC = () => {
               type="text"
               placeholder="Código do Grupo"
               value={joinId}
-              onChange={(e) => setJoinId(e.target.value)}
-              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 uppercase font-mono"
+              onChange={(e) => setJoinId(e.target.value.toUpperCase())}
+              className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 font-mono"
             />
+
             <button
               disabled={loading || !joinId}
               onClick={joinHousehold}
-              className="w-full py-4 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 transition-colors"
+              className="w-full py-4 bg-zinc-900 text-white rounded-xl font-medium hover:bg-zinc-800 transition-colors disabled:opacity-50"
             >
               {loading ? 'Entrando...' : 'Entrar no Grupo'}
             </button>
-            <button onClick={() => setMode('root')} className="w-full text-zinc-500 text-sm">Voltar</button>
+
+            <button
+              onClick={() => setMode('root')}
+              className="w-full text-zinc-500 text-sm"
+            >
+              Voltar
+            </button>
           </div>
         )}
       </motion.div>
